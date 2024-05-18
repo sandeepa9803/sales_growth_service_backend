@@ -17,6 +17,7 @@ sales_forecasting_router = APIRouter()
 
 
 class ProductBase(BaseModel):
+    product_id: str = Field(..., min_length=1) 
     product_name: str = Field(..., min_length=1) 
     product_category: str = Field(..., min_length=1)
     product_brand: str = Field(..., min_length=1)
@@ -29,6 +30,7 @@ class ProductCreate(ProductBase):
     pass  # All fields are required
 
 class ProductUpdate(ProductBase):
+    product_id: str | None = None
     product_name: str | None = None
     product_category: str | None = None
     product_brand: str | None = None
@@ -105,7 +107,6 @@ async def get_combined_sales() -> List[Dict[str, Any]]:
     }
 
     # Fetch predicted sales data
-    print(payload)
     predicted_sales_data = await get_predictions_sales(data=payload)
 
      # Combine actual and predicted sales
@@ -136,6 +137,37 @@ async def get_combined_sales() -> List[Dict[str, Any]]:
         })
 
     return combined_sales
+
+######### Data model for sales by product category
+class CategorySales(BaseModel):
+    product_category: str
+    total_sales: float
+
+# Endpoint for fetching sales by product category
+@sales_forecasting_router.get("/category-sales", response_model=List[CategorySales])
+async def get_sales_by_category() -> List[Dict[str, Any]]:
+    async with await get_db_connection() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cursor:
+            query = """
+            SELECT 
+                product_category,
+                SUM(amount) AS total_sales
+            FROM 
+                sales
+            GROUP BY 
+                product_category
+            """
+            await cursor.execute(query)
+            result = await cursor.fetchall()
+            # Convert Decimal to float for JSON serialization and format the response
+            formatted_result = [
+                {
+                    "product_category": record['product_category'],
+                    "total_sales": float(record['total_sales'])
+                } 
+                for record in result if record['total_sales'] is not None
+            ]
+            return formatted_result
 ########################################
 
 async def get_product_by_id(product_id: int) -> Optional[Product]:
@@ -150,15 +182,15 @@ async def create_product(product: ProductCreate) -> Product:
     async with await get_db_connection() as conn:
         async with conn.cursor() as cursor:
             await cursor.execute(
-                "INSERT INTO products (product_name, product_category, product_brand, selling_price, cost, max_margin, min_margin) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (product.product_name, product.product_category, product.product_brand, product.selling_price, product.cost, product.max_margin, product.min_margin)
+                "INSERT INTO products (product_id, product_name, product_category, product_brand, selling_price, cost, max_margin, min_margin) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (product.product_id, product.product_name, product.product_category, product.product_brand, product.selling_price, product.cost, product.max_margin, product.min_margin)
             )
             last_row_id = cursor.lastrowid
             await conn.commit()
             await cursor.close()
             return await get_product_by_id(last_row_id)
 
-async def get_all_products() -> List[Product]:
+async def get_all_products() :
     async with await get_db_connection() as conn:
         async with conn.cursor() as cursor:
             await cursor.execute("SELECT * FROM products")
@@ -192,7 +224,7 @@ async def delete_product(product_id: int) -> None:
         await conn.commit()
 
 # --- API Endpoints --- 
-@router.get("/")
+@router.get("/", response_model=List)
 async def list_products():
     return await get_all_products()
 
